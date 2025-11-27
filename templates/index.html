@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>NYC Buildings Map</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+
+    <style>
+        body { margin:0; font-family: Arial; }
+        #container { display:flex; height:100vh; width:100vw; }
+        #sidebar { width:300px; background:#f4f4f4; padding:20px; overflow-y:auto; }
+        #map { flex:1; }
+    </style>
+</head>
+<body>
+<div id="container">
+    <div id="sidebar">
+        <h2>Filters</h2>
+
+        <label>Borough</label>
+        <select id="boroughSelect">
+            <option value="">All</option>
+            <option value="MANHATTAN">Manhattan</option>
+            <option value="BROOKLYN">Brooklyn</option>
+            <option value="QUEENS">Queens</option>
+            <option value="BRONX">Bronx</option>
+            <option value="STATEN ISLAND">Staten Island</option>
+        </select>
+
+        <label>ENERGY STAR Range</label>
+        <input type="range" id="energyMin" min="0" max="100" value="0">
+        <input type="range" id="energyMax" min="0" max="100" value="100">
+        <div id="energyRange">0 - 100</div>
+
+        <label>Max GHG Emissions</label>
+        <input type="range" id="ghgMax" min="0" max="50000" value="50000">
+        <div id="ghgValue">50000</div>
+
+        <button id="applyFilters">Apply Filters</button>
+    </div>
+
+    <div id="map"></div>
+</div>
+
+<script>
+let map = L.map("map", {
+    center: [40.7128, -74.0060],
+    zoom: 11,
+    minZoom: 10,
+    maxZoom: 18,
+    maxBounds: [
+        [40.4774, -74.2591],  // Southwest corner
+        [40.9176, -73.7004]   // Northeast corner
+    ],
+    maxBoundsViscosity: 1.0
+});
+
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+
+let markerLayer = L.layerGroup().addTo(map);
+let heatLayer = L.layerGroup();
+let choroplethLayer = L.layerGroup().addTo(map);
+
+L.control.layers({}, {
+    "Markers": markerLayer,
+    "Heatmap": heatLayer,
+    "Choropleth": choroplethLayer
+}).addTo(map);
+
+// -----------------------------
+// FIX FILTER LABELS
+// -----------------------------
+energyMin.oninput = energyMax.oninput = () => {
+    if (+energyMin.value > +energyMax.value)
+        energyMax.value = energyMin.value;
+
+    energyRange.innerHTML = energyMin.value + " - " + energyMax.value;
+};
+
+ghgMax.oninput = () => ghgValue.innerHTML = ghgMax.value;
+
+
+// --------------------------------------------------------
+// FIXED: Load choropleth with better error handling and debugging
+// --------------------------------------------------------
+async function loadChoropleth() {
+    console.log("=== Starting Choropleth Load ===");
+    
+    // Use full URL to ensure we're hitting the right endpoint
+    const apiUrl = window.location.origin + "/api/ghg_by_postal";
+    console.log("Fetching GHG data from:", apiUrl);
+    
+    try {
+        const ghgRes = await fetch(apiUrl);
+        console.log("GHG API Response status:", ghgRes.status, ghgRes.statusText);
+        
+        if (!ghgRes.ok) {
+            console.error("Failed to fetch GHG data:", ghgRes.statusText);
+            const errorText = await ghgRes.text();
+            console.error("Error response:", errorText);
+            alert("Failed to load GHG data. Check console for details.");
+            return;
+        }
+        
+        const ghgJson = await ghgRes.json();
+        console.log("GHG response received:", ghgJson.length, "items");
+        console.log("Raw response type:", typeof ghgJson, Array.isArray(ghgJson));
+        
+        if (ghgJson.length === 0) {
+            console.error("No GHG data returned from API!");
+            alert("No GHG data available. Check Flask console for errors.");
+            return;
+        }
+        
+        console.log("First 3 GHG records:", ghgJson.slice(0, 3));
+
+        // Build map with multiple postal code formats
+        const ghgMap = {};
+        ghgJson.forEach(x => {
+            const postal = String(x.postal).trim();
+            ghgMap[postal] = x.total_ghg;
+            
+            // Also store 5-digit version if it's longer
+            if (postal.length > 5) {
+                ghgMap[postal.substring(0, 5)] = (ghgMap[postal.substring(0, 5)] || 0) + x.total_ghg;
+            }
+        });
+
+        console.log("GHG data sample:", Object.entries(ghgMap).slice(0, 5));
+        console.log("Total postal codes with GHG data:", Object.keys(ghgMap).length);
+
+        console.log("\nFetching GeoJSON from ../static/nyc_neighborhoods.geojson...");
+        const geoRes = await fetch("../static/nyc_neighborhoods.geojson");
+        console.log("GeoJSON Response status:", geoRes.status, geoRes.statusText);
+        
+        if (!geoRes.ok) {
+            console.error("Failed to fetch GeoJSON");
+            alert("Failed to load GeoJSON. Make sure nyc_neighborhoods.geojson exists in static/ folder.");
+            return;
+        }
+        
+        const geoData = await geoRes.json();
+        console.log("GeoJSON loaded:", geoData.features.length, "features");
+
+        // Check what postal code field exists in GeoJSON
+        if (geoData.features.length > 0) {
+            console.log("GeoJSON properties sample:", geoData.features[0].properties);
+        }
+
+        function getColor(v) {
+            return v > 50000 ? "#800026" :
+                   v > 10000 ? "#BD0026" :
+                   v > 5000  ? "#E31A1C" :
+                   v > 2000  ? "#FC4E2A" :
+                   v > 1000  ? "#FD8D3C" :
+                   v > 500   ? "#FEB24C" :
+                   v > 100   ? "#FED976" :
+                               "#FFEDA0";
+        }
+
+        let matchCount = 0;
+        let noMatchCount = 0;
+        let firstMatch = null;
+        let firstNoMatch = null;
+
+        L.geoJSON(geoData, {
+            style: feature => {
+                // Try different property names
+                const pc = String(
+                    feature.properties.postalCode || 
+                    feature.properties.ZCTA5CE10 || 
+                    feature.properties.ZIPCODE || 
+                    feature.properties.zip || 
+                    feature.properties.postal ||
+                    ''
+                ).trim();
+                
+                const g = ghgMap[pc] || 0;
+                
+                if (g > 0) {
+                    matchCount++;
+                    if (!firstMatch) firstMatch = {postal: pc, ghg: g};
+                } else {
+                    noMatchCount++;
+                    if (!firstNoMatch) firstNoMatch = {postal: pc};
+                }
+                
+                return {
+                    fillColor: getColor(g),
+                    weight: 1,
+                    color: "white",
+                    fillOpacity: 0.7
+                };
+            },
+            onEachFeature: (feature, layer) => {
+                const pc = String(
+                    feature.properties.postalCode || 
+                    feature.properties.ZCTA5CE10 || 
+                    feature.properties.ZIPCODE || 
+                    feature.properties.zip || 
+                    feature.properties.postal ||
+                    ''
+                ).trim();
+                const g = ghgMap[pc] || 0;
+                const name = feature.properties.PO_NAME || feature.properties.name || 'Unknown';
+                const borough = feature.properties.borough || feature.properties.boro_name || 'Unknown';
+                
+                layer.bindPopup(
+                    `<b>${name}</b><br>
+                     Borough: ${borough}<br>
+                     ZIP: ${pc}<br>
+                     GHG: ${g.toFixed(1)} MT CO2e`
+                );
+            }
+        }).addTo(choroplethLayer);
+
+        console.log(`\nChoropleth loaded: ${matchCount} matches, ${noMatchCount} no matches`);
+        if (firstMatch) console.log("Example match:", firstMatch);
+        if (firstNoMatch) console.log("Example no match:", firstNoMatch);
+        console.log("=== Choropleth Load Complete ===\n");
+        
+    } catch (error) {
+        console.error("Error in loadChoropleth:", error);
+        alert("Error loading choropleth: " + error.message);
+    }
+}
+
+loadChoropleth();
+
+
+// --------------------------------------------------------
+// FIXED: Load buildings (fetch now works)
+// --------------------------------------------------------
+async function loadBuildings() {
+    const params = new URLSearchParams({
+        borough: boroughSelect.value,
+        min_energy: energyMin.value,
+        max_energy: energyMax.value,
+        max_ghg: ghgMax.value
+    });
+
+    const apiUrl = window.location.origin + "/api/buildings?" + params.toString();
+    console.log("Fetching buildings from:", apiUrl);
+    const res = await fetch(apiUrl);
+    const data = await res.json();
+
+    markerLayer.clearLayers();
+    heatLayer.clearLayers();
+
+    let heatPoints = [];
+
+    data.forEach(b => {
+        if (!b.Latitude || !b.Longitude) return;
+
+        let m = L.marker([b.Latitude, b.Longitude])
+            .bindPopup(`
+                <b>${b["Property Name"]}</b><br>
+                ENERGY STAR: ${b.energy}<br>
+                GHG: ${b.ghg}
+            `)
+            .addTo(markerLayer);
+
+        heatPoints.push([b.Latitude, b.Longitude, b.ghg || 0]);
+    });
+
+    if (heatPoints.length)
+        L.heatLayer(heatPoints, { radius: 25 }).addTo(heatLayer);
+}
+
+loadBuildings();
+applyFilters.onclick = loadBuildings;
+
+</script>
+</body>
+</html>
