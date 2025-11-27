@@ -1,5 +1,5 @@
 # filename: load_parquet_duckdb.py
-
+# this is all ai, change as needed
 import duckdb
 import pandas as pd
 

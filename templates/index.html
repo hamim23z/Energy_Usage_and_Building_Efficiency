@@ -71,9 +71,7 @@ L.control.layers({}, {
     "Choropleth": choroplethLayer
 }).addTo(map);
 
-// -----------------------------
-// FIX FILTER LABELS
-// -----------------------------
+// Filter lables
 energyMin.oninput = energyMax.oninput = () => {
     if (+energyMin.value > +energyMax.value)
         energyMax.value = energyMin.value;
@@ -84,13 +82,9 @@ energyMin.oninput = energyMax.oninput = () => {
 ghgMax.oninput = () => ghgValue.innerHTML = ghgMax.value;
 
 
-// --------------------------------------------------------
-// FIXED: Load choropleth with better error handling and debugging
-// --------------------------------------------------------
 async function loadChoropleth() {
     console.log("=== Starting Choropleth Load ===");
     
-    // Use full URL to ensure we're hitting the right endpoint
     const apiUrl = window.location.origin + "/api/ghg_by_postal";
     console.log("Fetching GHG data from:", apiUrl);
     
@@ -151,6 +145,7 @@ async function loadChoropleth() {
             console.log("GeoJSON properties sample:", geoData.features[0].properties);
         }
 
+        // change later
         function getColor(v) {
             return v > 50000 ? "#800026" :
                    v > 10000 ? "#BD0026" :
@@ -169,7 +164,6 @@ async function loadChoropleth() {
 
         L.geoJSON(geoData, {
             style: feature => {
-                // Try different property names
                 const pc = String(
                     feature.properties.postalCode || 
                     feature.properties.ZCTA5CE10 || 
@@ -232,9 +226,6 @@ async function loadChoropleth() {
 loadChoropleth();
 
 
-// --------------------------------------------------------
-// FIXED: Load buildings (fetch now works)
-// --------------------------------------------------------
 async function loadBuildings() {
     const params = new URLSearchParams({
         borough: boroughSelect.value,
