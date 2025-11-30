@@ -1,6 +1,6 @@
 import pandas as pd
 
-INPUT_FILE = "NYC_Building_Energy_and_Water_Data_Disclosure_for_Local_Law_84_2023_to_Present_(Data_for_Calendar_Year_2022-Present)_20251125.csv"
+INPUT_FILE = "NYC_Building_Energy_and_Water_Data_Disclosure_for_Local_Law_84_2023_to_Present_(Data_for_Calendar_Year_2022-Present)_20251130.csv"
 OUTPUT_CSV = "nyc_energy_clean.csv"
 OUTPUT_PARQUET = "nyc_energy_clean.parquet"
 

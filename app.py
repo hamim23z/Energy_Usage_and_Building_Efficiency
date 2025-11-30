@@ -14,6 +14,16 @@ con = duckdb.connect(database=':memory:')
 
 try:
     print("Successfully connected to DuckDB")
+    
+    # DEBUG: Print unique boroughs found in the data to help troubleshoot
+    try:
+        print("Checking available boroughs in dataset...")
+        boroughs = con.execute("SELECT DISTINCT Borough FROM 'nyc_energy_clean.parquet'").fetchall()
+        clean_boroughs = [str(b[0]).strip() for b in boroughs if b[0] is not None]
+        print(f"Found Boroughs: {clean_boroughs}")
+    except Exception as e:
+        print(f"Could not list boroughs (File might be missing or empty): {e}")
+
 except Exception as e:
     print(f"Error connecting: {e}")
     traceback.print_exc()
@@ -28,6 +38,7 @@ def index():
 def test():
     try:
         with db_lock:
+            # Simple health check query
             df = con.execute("SELECT * FROM 'nyc_energy_clean.parquet' LIMIT 5").fetchdf()
         return jsonify({
             "columns": df.columns.tolist(),
@@ -37,56 +48,117 @@ def test():
         return jsonify({"error": str(e)})
 
 
+@app.route('/api/property_types')
+def get_property_types():
+    """Helper endpoint to get list of property types for a dropdown"""
+    try:
+        query = """
+        SELECT DISTINCT "Primary Property Type - Portfolio Manager-Calculated" as ptype
+        FROM 'nyc_energy_clean.parquet'
+        ORDER BY ptype
+        """
+        with db_lock:
+            df = con.execute(query).fetchdf()
+        return jsonify(df['ptype'].dropna().tolist())
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
 @app.route('/api/buildings')
 def get_buildings():
     try:
+        # Parse Query Parameters 
         borough    = request.args.get('borough', "")
         min_energy = float(request.args.get('min_energy', "0"))
         max_energy = float(request.args.get('max_energy', "100"))
-        max_ghg    = float(request.args.get('max_ghg', "500000"))
+        max_ghg    = float(request.args.get('max_ghg', "50000000")) # Default high to include all
+        min_year   = int(request.args.get('min_year', "0"))
+        max_year   = int(request.args.get('max_year', "2030"))
+        min_gfa    = float(request.args.get('min_gfa', "0"))
+        max_gfa    = float(request.args.get('max_gfa', "100000000"))
+        min_eui    = float(request.args.get('min_eui', "0"))
+        max_eui    = float(request.args.get('max_eui', "100000"))
+        prop_type  = request.args.get('property_type', "")
 
         print(f"\n{'='*60}")
-        print(f"GET /api/buildings - Filters: borough={borough}, energy={min_energy}-{max_energy}, ghg<={max_ghg}")
+        print(f"GET /api/buildings")
+        print(f"Filters: Boro='{borough}', Energy={min_energy}-{max_energy}")
+        print(f"         Year={min_year}-{max_year}, GFA={min_gfa}-{max_gfa}, Type='{prop_type}'")
         
-        # Get data with lock from parquet
-        with db_lock:
-            df = con.execute("SELECT * FROM 'nyc_energy_clean.parquet' LIMIT 2000").fetchdf()
+        query = """
+            SELECT 
+                "Property Name", 
+                TRY_CAST(Latitude AS DOUBLE) as lat,
+                TRY_CAST(Longitude AS DOUBLE) as lng,
+                COALESCE(TRY_CAST("ENERGY STAR Score" AS INTEGER), 50) as energy_clean,
+                COALESCE(TRY_CAST("Total (Location-Based) GHG Emissions (Metric Tons CO2e)" AS DOUBLE), 0) as ghg_clean,
+                "Postal Code",
+                
+                -- New Columns for Response & Filtering
+                TRY_CAST("Year Built" AS INTEGER) as year_built,
+                TRY_CAST("Property GFA - Calculated (Buildings) (ft²)" AS DOUBLE) as gfa,
+                TRY_CAST("Site EUI (kBtu/ft²)" AS DOUBLE) as site_eui,
+                "Primary Property Type - Portfolio Manager-Calculated" as prop_type
+                
+            FROM 'nyc_energy_clean.parquet'
+            WHERE 
+                lat IS NOT NULL 
+                AND lng IS NOT NULL
+                AND energy_clean BETWEEN ? AND ?
+                AND ghg_clean <= ?
+                AND (year_built IS NULL OR year_built BETWEEN ? AND ?)
+                AND (gfa IS NULL OR gfa BETWEEN ? AND ?)
+                AND (site_eui IS NULL OR site_eui BETWEEN ? AND ?)
+        """
         
-        print(f" Fetched {len(df)} buildings from parquet")
-        
-        df['Latitude'] = pd.to_numeric(df['Latitude'], errors='coerce')
-        df['Longitude'] = pd.to_numeric(df['Longitude'], errors='coerce')
-        df = df.dropna(subset=['Latitude', 'Longitude'])
-        
-        df['energy'] = df['ENERGY STAR Score'].replace('Not Available', None)
-        df['energy'] = pd.to_numeric(df['energy'], errors='coerce').fillna(50)
-
-        df['ghg'] = pd.to_numeric(df['Total (Location-Based) GHG Emissions (Metric Tons CO2e)'], errors='coerce').fillna(0)
-        
-        df['postal'] = df['Postal Code'].astype(str).str.strip()
-        
-        print(f"After cleaning: {len(df)} buildings")
+        # Params must match the order of ? in query
+        params = [
+            min_energy, max_energy, 
+            max_ghg,
+            min_year, max_year,
+            min_gfa, max_gfa,
+            min_eui, max_eui
+        ]
         
         if borough:
-            df = df[df['Borough'].str.upper() == borough.upper()]
-            print(f" After borough filter: {len(df)}")
-        
-        df = df[(df['energy'] >= min_energy) & (df['energy'] <= max_energy)]
-        df = df[df['ghg'] <= max_ghg]
-        
-        print(f"After all filters: {len(df)} buildings")
-        print(f"{'='*60}\n")
+            clean_borough = borough.upper().strip()
+            if clean_borough == "STATEN ISLAND":
+                query += " AND (UPPER(TRIM(Borough)) = ? OR UPPER(TRIM(Borough)) = 'RICHMOND' OR UPPER(TRIM(Borough)) = 'STATEN IS')"
+                params.append("STATEN ISLAND")
+            else:
+                query += " AND UPPER(TRIM(Borough)) = ?"
+                params.append(clean_borough)
 
+        if prop_type:
+            query += " AND UPPER(prop_type) = ?"
+            params.append(prop_type.upper())
+            
+        # Increase to see more results, but will slow down page
+        query += " LIMIT 1500"
+        
+        with db_lock:
+            df = con.execute(query, params).fetchdf()
+            
+        print(f"Fetched {len(df)} matching buildings from DuckDB")
+        
         result = []
-        for _, row in df.head(1500).iterrows():
+        for _, row in df.iterrows():
             result.append({
                 'Property Name': str(row['Property Name']),
-                'Latitude': float(row['Latitude']),
-                'Longitude': float(row['Longitude']),
-                'energy': float(row['energy']),
-                'ghg': float(row['ghg']),
-                'postal': row['postal']
+                'Latitude': float(row['lat']),
+                'Longitude': float(row['lng']),
+                'energy': float(row['energy_clean']),
+                'ghg': float(row['ghg_clean']),
+                'postal': str(row['Postal Code']).strip(),
+                
+                'year': int(row['year_built']) if pd.notna(row['year_built']) else None,
+                'gfa': float(row['gfa']) if pd.notna(row['gfa']) else None,
+                'eui': float(row['site_eui']) if pd.notna(row['site_eui']) else None,
+                'type': str(row['prop_type']) if row['prop_type'] else "Unknown"
             })
+        
+        print(f"Returning {len(result)} buildings")
+        print(f"{'='*60}\n")
         
         return jsonify(result)
         
@@ -102,7 +174,7 @@ def ghg_by_postal():
         print(f"\n{'='*60}")
         print("GET /api/ghg_by_postal")
         
-        # Query with aggregation directly in DuckDB to avoid loading all data
+        # Robust Aggregation Query
         query = """
         SELECT 
             CAST("Postal Code" AS VARCHAR) AS postal,
@@ -120,6 +192,9 @@ def ghg_by_postal():
             result = con.execute(query).fetchdf()
         
         print(f"Query complete: {len(result)} postal codes")
+        
+        # Clean postal codes
+        result['postal'] = result['postal'].apply(lambda x: x.split('.')[0] if x else x)
         
         if len(result) > 0:
             print(f"  Top 5 postal codes:")
