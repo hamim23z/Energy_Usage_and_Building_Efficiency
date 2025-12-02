@@ -3,7 +3,7 @@ import duckdb
 import pandas as pd
 import traceback
 from threading import Lock
-
+# Important, use clean for all rows, sample is for faster querying for visualization. Data analyisis should use the full clean dataset.
 app = Flask(__name__)
 
 # Create a lock for database access
@@ -18,7 +18,7 @@ try:
     # DEBUG: Print unique boroughs found in the data to help troubleshoot
     try:
         print("Checking available boroughs in dataset...")
-        boroughs = con.execute("SELECT DISTINCT Borough FROM 'nyc_energy_clean.parquet'").fetchall()
+        boroughs = con.execute("SELECT DISTINCT Borough FROM 'nyc_energy_sample.parquet'").fetchall()
         clean_boroughs = [str(b[0]).strip() for b in boroughs if b[0] is not None]
         print(f"Found Boroughs: {clean_boroughs}")
     except Exception as e:
@@ -39,7 +39,7 @@ def test():
     try:
         with db_lock:
             # Simple health check query
-            df = con.execute("SELECT * FROM 'nyc_energy_clean.parquet' LIMIT 5").fetchdf()
+            df = con.execute("SELECT * FROM 'nyc_energy_sample.parquet' LIMIT 5").fetchdf()
         return jsonify({
             "columns": df.columns.tolist(),
             "sample_data": df.head(5).to_dict(orient="records")
@@ -54,7 +54,7 @@ def get_property_types():
     try:
         query = """
         SELECT DISTINCT "Primary Property Type - Portfolio Manager-Calculated" as ptype
-        FROM 'nyc_energy_clean.parquet'
+        FROM 'nyc_energy_sample.parquet'
         ORDER BY ptype
         """
         with db_lock:
@@ -100,7 +100,7 @@ def get_buildings():
                 TRY_CAST("Site EUI (kBtu/ft²)" AS DOUBLE) as site_eui,
                 "Primary Property Type - Portfolio Manager-Calculated" as prop_type
                 
-            FROM 'nyc_energy_clean.parquet'
+            FROM 'nyc_energy_sample.parquet'
             WHERE 
                 lat IS NOT NULL 
                 AND lng IS NOT NULL
@@ -179,7 +179,7 @@ def ghg_by_postal():
         SELECT 
             CAST("Postal Code" AS VARCHAR) AS postal,
             SUM(TRY_CAST("Total (Location-Based) GHG Emissions (Metric Tons CO2e)" AS DOUBLE)) AS total_ghg
-        FROM 'nyc_energy_clean.parquet'
+        FROM 'nyc_energy_sample.parquet'
         WHERE "Postal Code" IS NOT NULL
         GROUP BY postal
         HAVING total_ghg > 0
