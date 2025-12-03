@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>NYC Buildings Map</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.7.0/nouislider.min.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.7.0/nouislider.min.js"></script>
+
+    <link rel="stylesheet" href="../static/style.css" />
+</head>
+<body>
+
+<nav class="navbar">
+    <div class="brand">
+        <h1>NYC Energy Map</h1>
+    </div>
+    <div class="nav-links">
+        <a href="index.html">Home</a>
+        <a href="sources.html">Sources</a>
+        <a href="analytics.html">Data Analysis</a>
+        <a href="slides.html">Presentation Slides</a>
+    </div>
+</nav>
+
+<div id="container">
+    <div id="sidebar">
+        <h2>Filters</h2>
+
+        <div class="filter-group">
+            <label>Borough</label>
+            <select id="boroughSelect">
+                <option value="">All Boroughs</option>
+                <option value="MANHATTAN">Manhattan</option>
+                <option value="BROOKLYN">Brooklyn</option>
+                <option value="QUEENS">Queens</option>
+                <option value="BRONX">Bronx</option>
+                <option value="STATEN ISLAND">Staten Island</option>
+            </select>
+        </div>
+
+        <div class="filter-group">
+            <label>Property Type</label>
+            <select id="typeSelect">
+                <option value="">All Types</option>
+            </select>
+        </div>
+
+        <div class="filter-group">
+            <label>ENERGY STAR Score</label>
+            <div id="energySlider"></div>
+            <div id="energyRange" class="filter-value">Range: 0 - 100</div>
+        </div>
+
+        <div class="filter-group">
+            <label>Year Built</label>
+            <div class="input-row">
+                <input type="number" id="yearMin" placeholder="Min (1900)" min="1800" max="2030">
+                <input type="number" id="yearMax" placeholder="Max (2030)" min="1800" max="2030">
+            </div>
+        </div>
+
+        <div class="filter-group">
+            <label>Size (Sq Ft)</label>
+            <div class="input-row">
+                <input type="number" id="gfaMin" placeholder="Min SqFt" step="5000">
+                <input type="number" id="gfaMax" placeholder="Max SqFt" step="5000">
+            </div>
+        </div>
+
+        <div class="filter-group">
+            <label>Site EUI (kBtu/ft²)</label>
+            <div class="input-row">
+                <input type="number" id="euiMin" placeholder="Min" step="5">
+                <input type="number" id="euiMax" placeholder="Max" step="5">
+            </div>
+        </div>
+
+        <div class="filter-group">
+            <label>Max GHG Emissions</label>
+            <input type="range" id="ghgMax" min="0" max="50000" value="50000">
+            <div id="ghgValue" class="filter-value">Max: 50,000</div>
+        </div>
+
+        <button id="applyFilters">Apply Filters</button>
+    </div>
+
+    <div id="map"></div>
+</div>
+
+<!-- JS scripts -->
+<script>
+let map = L.map("map", {
+    center: [40.7128, -74.0060],
+    zoom: 11,
+    minZoom: 10,
+    maxZoom: 18
+});
+
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+
+let markerLayer = L.layerGroup().addTo(map);
+let heatLayer = L.layerGroup();
+let choroplethLayer = L.layerGroup().addTo(map);
+
+L.control.layers({}, {
+    "Markers": markerLayer,
+    "Heatmap": heatLayer,
+    "Choropleth": choroplethLayer
+}).addTo(map);
+
+
+var slider = document.getElementById('energySlider');
+var energyRangeText = document.getElementById('energyRange');
+
+noUiSlider.create(slider, {
+    start: [0, 100],
+    connect: true,
+    range: { 'min': 0, 'max': 100 },
+    step: 1
+});
+
+slider.noUiSlider.on('update', function (values) {
+    energyRangeText.innerHTML = "Range: " + Math.round(values[0]) + " - " + Math.round(values[1]);
+});
+
+// GHG Slider Text Update
+const ghgMaxInput = document.getElementById('ghgMax');
+const ghgValueText = document.getElementById('ghgValue');
+ghgMaxInput.oninput = () => ghgValueText.innerHTML = "Max: " + Number(ghgMaxInput.value).toLocaleString();
+
+async function loadPropertyTypes() {
+    try {
+        const res = await fetch('/api/property_types');
+        const types = await res.json();
+        const select = document.getElementById('typeSelect');
+        
+        types.forEach(type => {
+            let opt = document.createElement('option');
+            opt.value = type;
+            opt.innerText = type;
+            select.appendChild(opt);
+        });
+    } catch (e) {
+        console.error("Error loading property types:", e);
+    }
+}
+loadPropertyTypes();
+
+async function loadBuildings() {
+    // Get values from noUiSlider
+    const energyValues = slider.noUiSlider.get();
+
+    const params = new URLSearchParams({
+        borough: document.getElementById('boroughSelect').value,
+        property_type: document.getElementById('typeSelect').value,
+        
+        min_energy: Math.round(energyValues[0]),
+        max_energy: Math.round(energyValues[1]),
+        
+        min_year: document.getElementById('yearMin').value || 0,
+        max_year: document.getElementById('yearMax').value || 2030,
+        
+        min_gfa: document.getElementById('gfaMin').value || 0,
+        max_gfa: document.getElementById('gfaMax').value || 100000000,
+        
+        min_eui: document.getElementById('euiMin').value || 0,
+        max_eui: document.getElementById('euiMax').value || 100000,
+        
+        max_ghg: ghgMaxInput.value
+    });
+
+    const apiUrl = window.location.origin + "/api/buildings?" + params.toString();
+    console.log("Fetching:", apiUrl);
+    
+    try {
+        const res = await fetch(apiUrl);
+        const data = await res.json();
+
+        markerLayer.clearLayers();
+        heatLayer.clearLayers();
+
+        let heatPoints = [];
+
+        data.forEach(b => {
+            if (!b.Latitude || !b.Longitude) return;
+
+            // Updated Popup Content
+            const popupContent = `
+                <div style="font-size:14px">
+                    <b>${b["Property Name"]}</b><br>
+                    <hr style="margin:5px 0">
+                    Type: ${b.type}<br>
+                    Year Built: ${b.year || 'N/A'}<br>
+                    Size: ${b.gfa ? b.gfa.toLocaleString() : 'N/A'} ft²<br>
+                    <br>
+                    <b>Metrics:</b><br>
+                    ENERGY STAR: <b>${b.energy}</b><br>
+                    Site EUI: ${b.eui || 'N/A'}<br>
+                    GHG Emissions: ${b.ghg.toFixed(1)}
+                </div>
+            `;
+
+            L.marker([b.Latitude, b.Longitude])
+                .bindPopup(popupContent)
+                .addTo(markerLayer);
+
+            heatPoints.push([b.Latitude, b.Longitude, b.ghg || 0]);
+        });
+
+        if (heatPoints.length) {
+            L.heatLayer(heatPoints, { radius: 25 }).addTo(heatLayer);
+        }
+    } catch (e) {
+        console.error("Error loading buildings:", e);
+        alert("Error loading data. See console.");
+    }
+}
+
+async function loadChoropleth() {
+    try {
+        const ghgRes = await fetch(window.location.origin + "/api/ghg_by_postal");
+        const ghgJson = await ghgRes.json();
+        
+        const ghgMap = {};
+        ghgJson.forEach(x => {
+            const postal = String(x.postal).trim();
+            ghgMap[postal] = x.total_ghg;
+            if (postal.length > 5) ghgMap[postal.substring(0, 5)] = (ghgMap[postal.substring(0, 5)] || 0) + x.total_ghg;
+        });
+
+        const geoRes = await fetch("../static/nyc_neighborhoods.geojson");
+        const geoData = await geoRes.json();
+
+        function getColor(v) {
+            return v > 1000000 ? "#800026" : v > 500000 ? "#BD0026" : v > 100000 ? "#E31A1C" :
+                   v > 50000  ? "#FC4E2A" : v > 10000  ? "#FD8D3C" : v > 5000   ? "#FEB24C" : "#FFEDA0";
+        }
+
+        L.geoJSON(geoData, {
+            style: feature => {
+                const pc = String(feature.properties.postalCode || feature.properties.zip || '').trim();
+                return { fillColor: getColor(ghgMap[pc] || 0), weight: 1, color: "white", fillOpacity: 0.7 };
+            },
+            onEachFeature: (feature, layer) => {
+                const pc = String(feature.properties.postalCode || feature.properties.zip || '').trim();
+                layer.bindPopup(`<b>${feature.properties.PO_NAME || 'Region'}</b><br>ZIP: ${pc}<br>GHG: ${(ghgMap[pc] || 0).toFixed(1)}`);
+            }
+        }).addTo(choroplethLayer);
+        
+    } catch (error) { console.error("Choropleth Error:", error); }
+}
+
+// Init
+loadChoropleth();
+loadBuildings();
+document.getElementById('applyFilters').onclick = loadBuildings;
+
+</script>
+</body>
+</html>
