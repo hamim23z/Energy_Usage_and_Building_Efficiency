@@ -1,3 +1,7 @@
+# Now this file takes the output parquet that David got from the parser.py. Again, it's still huge, but not as big as before. In order to actually 
+# run a test sample on the site and the pipeline, we use only 2000 from each borough, so 10,000 in total. And then to avoid any bias, its shuffled
+# and then this sample is then saved as "nyc_energy_sample.parquet". THIS IS JUST A SAMPLE, NOT THE ENTIRE PARQUET. 
+
 import pandas as pd
 
 df = pd.read_parquet('nyc_energy_clean.parquet')  # replace with your actual file path
