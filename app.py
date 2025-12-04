@@ -33,6 +33,9 @@ except Exception as e:
 def index():
     return render_template('index.html')
 
+@app.route('/sources.html')
+def source_page():
+    return render_template('sources.html')
 
 @app.route('/api/test')
 def test():
