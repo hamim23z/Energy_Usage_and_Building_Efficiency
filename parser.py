@@ -1,3 +1,9 @@
+# So what this file does it take the massive CSV file from NYC Open Data website, and it parses it to make it cleaner. David set up the input file
+# and the output CSV and output Parquet, both files to be used clean. We use the Parquet file because its better in Python and pandas and DuckDB is
+# better with it too.
+# Then bc theres so many columns, David lists the columns to keep, there are 21 COLUMNS KEPT. And then after this, he begins reading the CSV file in
+# chunks bc its so big. Drop rows without coords, making sure its lat/long is correct for NYC (useful for the map display). And finally saves the files.
+
 import pandas as pd
 
 INPUT_FILE = "NYC_Building_Energy_and_Water_Data_Disclosure_for_Local_Law_84_2023_to_Present_(Data_for_Calendar_Year_2022-Present)_20251130.csv"
