@@ -36,9 +36,14 @@ def index():
 @app.route('/sources.html')
 def source_page():
     return render_template('sources.html')
+
 @app.route('/analytics.html')
 def analytics():
     return render_template('analytics.html')
+
+@app.route('/info.slides.html')
+def info_slides():
+    return render_template('info.slides.html')
 
 @app.route('/api/test')
 def test():
